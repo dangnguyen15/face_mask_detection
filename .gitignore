@@ -67,3 +67,28 @@ Thumbs.db
 # =========================
 
 .cache/
+
+
+
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Dataset
+dataset/
+
+# Models
+models/*.pt
+models/*.weights
+models/*.keras
+models/*.h5
+
+# VSCode
+.vscode/
+
+# System
+.DS_Store
+Thumbs.db
