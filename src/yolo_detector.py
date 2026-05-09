@@ -1,5 +1,5 @@
 from ultralytics import YOLO
-
+#add model
 model = YOLO("models/yolov3.pt")
 
 def detect_faces(frame):
