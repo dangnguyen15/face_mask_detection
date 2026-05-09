@@ -5,7 +5,6 @@ from tensorflow.keras.layers import Flatten
 from tensorflow.keras.layers import Dense
 from tensorflow.keras.layers import Dropout
 
-
 def build_model():
 
     model = Sequential()

@@ -2,7 +2,6 @@ from ultralytics import YOLO
 
 model = YOLO("models/yolov3.pt")
 
-
 def detect_faces(frame):
 
     results = model(frame)
