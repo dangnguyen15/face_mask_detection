@@ -6,79 +6,105 @@ Dùng mô hình Keras (.keras) để phân loại từng ROI khuôn mặt:
   - "Khong co khau trang" (no mask)
 """
  
+from __future__ import annotations
 import numpy as np
 import cv2
-from tensorflow.keras.models import load_model  # type: ignore
+import zipfile
+import tempfile
+import os
  
- 
-# Kích thước ảnh đầu vào mô hình (phải khớp với lúc bạn train)
-IMG_SIZE = (224, 224)
- 
-# Nhãn — thứ tự phải đúng với class index khi train
+IMG_SIZE = (128, 128)
 LABELS = ["Co khau trang", "Khong co khau trang"]
- 
-# Màu bounding-box tương ứng (BGR cho OpenCV)
 COLORS = {
-    "Co khau trang": (0, 200, 0),       # xanh lá
-    "Khong co khau trang": (0, 0, 220), # đỏ
+    "Co khau trang": (0, 200, 0),
+    "Khong co khau trang": (0, 0, 220),
 }
  
  
 class MaskPredictor:
-    """
-    Phân loại khuôn mặt có đeo khẩu trang hay không.
- 
-    Parameters
-    ----------
-    model_path : str
-        Đường dẫn tới face_mask_model.keras
-    """
- 
     def __init__(self, model_path: str):
         try:
-            self.model = load_model(model_path)
+            self.model = self._build_and_load(model_path)
         except Exception as e:
-            raise RuntimeError(f"Không thể load mask model từ '{model_path}': {e}")
+            raise RuntimeError(f"Khong the load mask model tu '{model_path}': {e}")
+ 
+    def _build_and_load(self, model_path: str):
+        import tensorflow as tf
+        from tensorflow import keras
+        import h5py
+ 
+        # Giai nen file .keras
+        tmp_dir = tempfile.mkdtemp()
+        with zipfile.ZipFile(model_path, "r") as zf:
+            zf.extractall(tmp_dir)
+        weights_path = os.path.join(tmp_dir, "model.weights.h5")
+ 
+        # In tat ca keys de debug
+        with h5py.File(weights_path, "r") as f:
+            all_keys = list(f.keys())
+            print(f"[predict] Top-level keys: {all_keys}")
+ 
+        # Build model
+        model = keras.Sequential([
+            keras.layers.Input(shape=(128, 128, 3)),
+            keras.layers.Conv2D(32, (3, 3), activation="relu", name="conv2d"),
+            keras.layers.MaxPooling2D((2, 2), name="max_pooling2d"),
+            keras.layers.Conv2D(64, (3, 3), activation="relu", name="conv2d_1"),
+            keras.layers.MaxPooling2D((2, 2), name="max_pooling2d_1"),
+            keras.layers.Conv2D(128, (3, 3), activation="relu", name="conv2d_2"),
+            keras.layers.MaxPooling2D((2, 2), name="max_pooling2d_2"),
+            keras.layers.Flatten(name="flatten"),
+            keras.layers.Dense(128, activation="relu", name="dense"),
+            keras.layers.Dropout(0.5, name="dropout"),
+            keras.layers.Dense(1, activation="sigmoid", name="dense_1"),
+        ])
+        model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+ 
+        # Load weights - thu ca 2 separator
+        with h5py.File(weights_path, "r") as f:
+            # Lay top key dau tien
+            top_key = list(f.keys())[0]
+            print(f"[predict] Su dung top key: '{top_key}'")
+            root = f[top_key]
+ 
+            for layer in model.layers:
+                layer_name = layer.name
+                # Thu tim key khop (co the dung \ hoac /)
+                matched_key = None
+                for k in root.keys():
+                    if k == layer_name or k.replace("\\", "/") == layer_name:
+                        matched_key = k
+                        break
+ 
+                if matched_key is None:
+                    continue
+ 
+                vars_group = root[matched_key]["vars"]
+                weights = [vars_group[str(i)][()] for i in range(len(vars_group))]
+                if weights:
+                    layer.set_weights(weights)
+                    print(f"[predict] Loaded layer: {layer_name}")
+ 
+        print("[predict] Load weights thanh cong!")
+        return model
  
     def preprocess(self, face_roi: np.ndarray) -> np.ndarray:
-        """Resize + normalize ROI về tensor (1, H, W, 3)."""
         resized = cv2.resize(face_roi, IMG_SIZE)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
         normalized = rgb.astype("float32") / 255.0
-        return np.expand_dims(normalized, axis=0)  # (1, 224, 224, 3)
+        return np.expand_dims(normalized, axis=0)
  
-    def predict(self, face_roi: np.ndarray) -> tuple[str, float]:
-        """
-        Dự đoán nhãn và độ tin cậy cho một khuôn mặt.
- 
-        Returns
-        -------
-        (label, confidence)  —  label: str, confidence: float [0,1]
-        """
+    def predict(self, face_roi: np.ndarray) -> tuple:
         if face_roi is None or face_roi.size == 0:
             return LABELS[1], 0.0
- 
         tensor = self.preprocess(face_roi)
-        preds = self.model.predict(tensor, verbose=0)[0]  # shape (num_classes,)
+        pred = float(self.model.predict(tensor, verbose=0)[0][0])
+        if pred >= 0.5:
+            return LABELS[0], pred
+        else:
+            return LABELS[1], 1.0 - pred
  
-        idx = int(np.argmax(preds))
-        label = LABELS[idx] if idx < len(LABELS) else "Khong xac dinh"
-        confidence = float(preds[idx])
-        return label, confidence
- 
-    def predict_batch(
-        self, face_rois: list[np.ndarray]
-    ) -> list[tuple[str, float]]:
-        """Dự đoán nhiều khuôn mặt cùng lúc (hiệu quả hơn loop)."""
+    def predict_batch(self, face_rois: list) -> list:
         if not face_rois:
             return []
- 
-        batch = np.concatenate([self.preprocess(roi) for roi in face_rois], axis=0)
-        all_preds = self.model.predict(batch, verbose=0)  # (N, num_classes)
- 
-        results = []
-        for preds in all_preds:
-            idx = int(np.argmax(preds))
-            label = LABELS[idx] if idx < len(LABELS) else "Khong xac dinh"
-            results.append((label, float(preds[idx])))
-        return results
+        return [self.predict(roi) for roi in face_rois]

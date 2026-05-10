@@ -5,6 +5,8 @@ Dùng YOLOv3 (file .pt từ ultralytics/torch) để phát hiện khuôn mặt n
 Trả về danh sách bounding-box (x1, y1, x2, y2) cho mỗi khuôn mặt tìm thấy.
 """
  
+from __future__ import annotations
+ 
 import numpy as np
 import torch
  
@@ -73,4 +75,3 @@ class YOLOFaceDetector:
                 boxes.append((x1, y1, x2, y2))
  
         return boxes
- 

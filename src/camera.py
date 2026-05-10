@@ -5,7 +5,8 @@ Quản lý vòng lặp capture từ webcam, chạy trong thread riêng.
 Kết hợp YOLO detector + Mask predictor để xử lý từng frame,
 rồi trả frame đã annotate qua callback.
 """
- 
+from __future__ import annotations
+
 import threading
 import time
 import cv2

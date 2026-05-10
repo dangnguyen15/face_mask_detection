@@ -25,8 +25,8 @@ from src.camera import CameraThread
 from src.ui import MaskDetectionUI
  
 # ── Đường dẫn model ─────────────────────────────────────────────────────────────
-YOLO_MODEL_PATH = os.path.join(ROOT, "model", "yolov3.pt")
-MASK_MODEL_PATH = os.path.join(ROOT, "model", "face_mask_model.keras")
+YOLO_MODEL_PATH = os.path.join(ROOT, "models", "yolov3.pt")
+MASK_MODEL_PATH = os.path.join(ROOT, "models", "face_mask_model.keras")
  
  
 def main():
@@ -59,7 +59,7 @@ def main():
  
     # 3. Khởi động Tkinter UI
     root = tk.Tk()
-    root.geometry("1060x600")
+    root.geometry("900x560")
     app = MaskDetectionUI(root, camera_factory)
  
     print("[main] Giao diện đã khởi động.")
