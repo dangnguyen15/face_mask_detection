@@ -12,13 +12,13 @@ from dataset_loader import load_dataset
 # PATH
 # =========================
 
-MODEL_DIR = "../models"
+MODEL_DIR = "models"
 
-MODEL_PATH = "../models/face_mask_model.keras"
+MODEL_PATH = "models/face_mask_model.keras"
 
-DATASET_PATH = "../dataset"
+DATASET_PATH = "dataset"
 
-GRAPH_PATH = "../models/training_graph.png"
+GRAPH_PATH = "models/training_graph.png"
 
 
 # =========================

@@ -1,90 +1,74 @@
-"""
-predict.py
-----------
-Dùng mô hình Keras (.keras) để phân loại từng ROI khuôn mặt:
-  - "Co khau trang"  (wearing mask)
-  - "Khong co khau trang" (no mask)
-"""
- 
-from __future__ import annotations
-import numpy as np
 import cv2
-import zipfile
-import tempfile
+import numpy as np
 import os
- 
-IMG_SIZE = (128, 128)
-LABELS = ["Co khau trang", "Khong co khau trang"]
-COLORS = {
-    "Co khau trang": (0, 200, 0),
-    "Khong co khau trang": (0, 0, 220),
-}
- 
- 
+from tensorflow.keras.models import load_model
+
 class MaskPredictor:
-    def __init__(self, model_path: str):
-        try:
-            self.model = self._build_and_load(model_path)
-        except Exception as e:
-            raise RuntimeError(f"Khong the load mask model tu '{model_path}': {e}")
- 
-    def _build_and_load(self, model_path: str):
-        from tensorflow import keras
-        import h5py
- 
-        tmp_dir = tempfile.mkdtemp()
-        with zipfile.ZipFile(model_path, "r") as zf:
-            zf.extractall(tmp_dir)
-        weights_path = os.path.join(tmp_dir, "model.weights.h5")
- 
-        model = keras.Sequential([
-            keras.layers.Input(shape=(128, 128, 3)),
-            keras.layers.Conv2D(32, (3, 3), activation="relu", name="conv2d"),
-            keras.layers.MaxPooling2D((2, 2), name="max_pooling2d"),
-            keras.layers.Conv2D(64, (3, 3), activation="relu", name="conv2d_1"),
-            keras.layers.MaxPooling2D((2, 2), name="max_pooling2d_1"),
-            keras.layers.Conv2D(128, (3, 3), activation="relu", name="conv2d_2"),
-            keras.layers.MaxPooling2D((2, 2), name="max_pooling2d_2"),
-            keras.layers.Flatten(name="flatten"),
-            keras.layers.Dense(128, activation="relu", name="dense"),
-            keras.layers.Dropout(0.5, name="dropout"),
-            keras.layers.Dense(1, activation="sigmoid", name="dense_1"),
-        ])
-        model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
- 
-        with h5py.File(weights_path, "r") as f:
-            for layer in model.layers:
-                name = layer.name
-                # Key dung backslash trong ten: "layers\conv2d"
-                layer_key = f"layers\\{name}"
-                if layer_key not in f:
-                    continue
-                vars_group = f[layer_key]["vars"]
-                weights = [vars_group[str(i)][()] for i in range(len(vars_group))]
-                if weights:
-                    layer.set_weights(weights)
-                    print(f"[predict] Loaded {name}: std={weights[0].std():.4f}")
- 
-        print("[predict] Load weights thanh cong!")
-        return model
- 
-    def preprocess(self, face_roi: np.ndarray) -> np.ndarray:
-        resized = cv2.resize(face_roi, IMG_SIZE)
-        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-        normalized = rgb.astype("float32") / 255.0
-        return np.expand_dims(normalized, axis=0)
- 
-    def predict(self, face_roi: np.ndarray) -> tuple:
-        if face_roi is None or face_roi.size == 0:
-            return LABELS[1], 0.0
-        tensor = self.preprocess(face_roi)
-        pred = float(self.model.predict(tensor, verbose=0)[0][0])
-        if pred >= 0.38:
-            return LABELS[0], pred
-        else:
-            return LABELS[1], 1.0 - pred
- 
-    def predict_batch(self, face_rois: list) -> list:
-        if not face_rois:
-            return []
-        return [self.predict(roi) for roi in face_rois]
+    def __init__(self, model_path):
+        # 1. Nạp mô hình CNN của bạn
+        print("[INFO] Đang nạp model phân loại khẩu trang...")
+        self.model = load_model(model_path)
+        self.img_size = 128
+        
+        # 2. Nạp bộ nhận diện khuôn mặt DNN (Stage 1)
+        # Đảm bảo tên file khớp chính xác với file bạn đã tải
+        prototxt = "deploy.prototxt" 
+        weights = "res10_300x300_ssd_iter_140000.caffemodel"
+        
+        if not os.path.exists(prototxt) or not os.path.exists(weights):
+            print(f"[ERROR] Không tìm thấy file {prototxt} hoặc {weights}!")
+            print("Vui lòng kiểm tra lại tên file trong thư mục gốc.")
+            
+        self.face_net = cv2.dnn.readNetFromCaffe(prototxt, weights)
+        print("[INFO] Đã nạp xong bộ nhận diện khuôn mặt DNN.")
+
+    def predict(self, frame):
+        if frame is None: return []
+        
+        h, w = frame.shape[:2]
+        # Tiền xử lý ảnh cho DNN (Stage 1)
+        blob = cv2.dnn.blobFromImage(cv2.resize(frame, (300, 300)), 1.0,
+                                     (300, 300), (104.0, 177.0, 123.0))
+        self.face_net.setInput(blob)
+        detections = self.face_net.forward()
+
+        results = []
+        for i in range(0, detections.shape[2]):
+            confidence = detections[0, 0, i, 2]
+            
+            # Chỉ lấy các vùng có độ tin cậy là mặt người > 50%
+            if confidence > 0.5:
+                # Tính toán tọa độ khung bao
+                box = detections[0, 0, i, 3:7] * np.array([w, h, w, h])
+                (startX, startY, endX, endY) = box.astype("int")
+                
+                # Đảm bảo khung bao nằm trong kích thước ảnh
+                startX, startY = max(0, startX), max(0, startY)
+                endX, endY = min(w - 1, endX), min(h - 1, endY)
+                
+                # Cắt vùng mặt để quét khẩu trang (Stage 2)
+                face_roi = frame[startY:endY, startX:endX]
+                if face_roi.size == 0: continue
+
+                # Tiền xử lý vùng mặt cho model CNN của bạn
+                face_input = cv2.resize(face_roi, (self.img_size, self.img_size))
+                face_input = face_input / 255.0
+                face_input = np.expand_dims(face_input, axis=0)
+
+                # Dự đoán khẩu trang
+                prediction = self.model.predict(face_input, verbose=0)[0][0]
+                
+                # Phân loại nhãn (Threshold 0.5)
+                # 0 thường là Mask, 1 thường là No Mask (kiểm tra lại dataset của bạn)
+                label = "No Mask" if prediction < 0.5 else "Mask"
+                color = (0, 0, 225) if label == "No Mask" else (0, 225, 0)
+                
+                # Tính toán độ tin cậy hiển thị (Accuracy)
+                acc = (1 - prediction) * 100 if label == "Mask" else prediction * 100
+                
+                results.append({
+                    "box": (startX, startY, endX - startX, endY - startY),
+                    "label": f"{label} ({acc:.1f}%)",
+                    "color": color
+                })
+        return results
