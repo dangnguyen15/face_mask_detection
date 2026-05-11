@@ -5,8 +5,8 @@ Quản lý vòng lặp capture từ webcam, chạy trong thread riêng.
 Kết hợp YOLO detector + Mask predictor để xử lý từng frame,
 rồi trả frame đã annotate qua callback.
 """
+ 
 from __future__ import annotations
-
 import threading
 import time
 import cv2
@@ -17,30 +17,8 @@ from src.predict import MaskPredictor, COLORS
  
  
 class CameraThread(threading.Thread):
-    """
-    Thread đọc frame từ webcam và chạy inference.
- 
-    Parameters
-    ----------
-    detector : YOLOFaceDetector
-    predictor : MaskPredictor
-    on_frame : callable(annotated_frame, stats_dict)
-        Callback được gọi mỗi khi có frame mới đã xử lý.
-        stats_dict = {"total": int, "mask": int, "no_mask": int, "fps": float}
-    camera_index : int
-        Index camera (mặc định 0 — webcam chính)
-    target_fps : int
-        FPS tối đa muốn xử lý (để giảm tải CPU/GPU)
-    """
- 
-    def __init__(
-        self,
-        detector: YOLOFaceDetector,
-        predictor: MaskPredictor,
-        on_frame,
-        camera_index: int = 0,
-        target_fps: int = 20,
-    ):
+    def __init__(self, detector: YOLOFaceDetector, predictor: MaskPredictor,
+                 on_frame, camera_index: int = 0, target_fps: int = 25):
         super().__init__(daemon=True)
         self.detector = detector
         self.predictor = predictor
@@ -50,136 +28,105 @@ class CameraThread(threading.Thread):
  
         self._running = threading.Event()
         self._paused = threading.Event()
-        self._paused.set()  # bắt đầu ở trạng thái "chạy"
- 
-        self.cap: cv2.VideoCapture | None = None
- 
-    # ------------------------------------------------------------------
-    # Public controls
-    # ------------------------------------------------------------------
- 
-    def stop(self):
-        """Dừng thread và giải phóng camera."""
-        self._running.clear()
- 
-    def pause(self):
-        self._paused.clear()
- 
-    def resume(self):
         self._paused.set()
+        self.cap = None
+ 
+        # Cache: chi chay mask predict moi N frame de giam lag
+        self._frame_count = 0
+        self._predict_every = 2   # predict 1 lan moi 2 frame
+        self._last_boxes = []
+        self._last_preds = []
  
     @property
-    def is_running(self) -> bool:
+    def is_running(self):
         return self._running.is_set()
  
-    # ------------------------------------------------------------------
-    # Main loop
-    # ------------------------------------------------------------------
+    def stop(self):
+        self._running.clear()
  
     def run(self):
         self._running.set()
-        self.cap = cv2.VideoCapture(self.camera_index)
+        self.cap = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)  # CAP_DSHOW nhanh hon tren Windows
  
         if not self.cap.isOpened():
-            print(f"[CameraThread] Không thể mở camera index={self.camera_index}")
+            print(f"[CameraThread] Khong the mo camera index={self.camera_index}")
             self._running.clear()
             return
  
-        # Tuỳ chọn: tăng độ phân giải nếu webcam hỗ trợ
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # giam buffer de giam do tre
  
         interval = 1.0 / self.target_fps
         prev_time = time.time()
  
         while self._running.is_set():
-            self._paused.wait()  # block nếu đang pause
+            self._paused.wait()
  
             ret, frame = self.cap.read()
             if not ret:
-                time.sleep(0.05)
+                time.sleep(0.02)
                 continue
  
-            # Giới hạn FPS xử lý
             now = time.time()
-            elapsed = now - prev_time
-            if elapsed < interval:
-                time.sleep(interval - elapsed)
-            fps = 1.0 / max(time.time() - prev_time, 1e-6)
-            prev_time = time.time()
+            fps = 1.0 / max(now - prev_time, 1e-6)
+            prev_time = now
  
             annotated, stats = self._process_frame(frame, fps)
             self.on_frame(annotated, stats)
  
+            # Gioi han FPS
+            elapsed = time.time() - prev_time
+            if elapsed < interval:
+                time.sleep(interval - elapsed)
+ 
         if self.cap:
             self.cap.release()
  
-    # ------------------------------------------------------------------
-    # Frame processing
-    # ------------------------------------------------------------------
+    def _process_frame(self, frame: np.ndarray, fps: float):
+        self._frame_count += 1
  
-    def _process_frame(
-        self, frame: np.ndarray, fps: float
-    ) -> tuple[np.ndarray, dict]:
-        """Detect faces → classify masks → annotate frame."""
-        boxes = self.detector.detect(frame)
+        # Chi detect + predict moi N frame
+        if self._frame_count % self._predict_every == 0:
+            boxes = self.detector.detect(frame)
+            self._last_boxes = boxes
+ 
+            if boxes:
+                rois = [frame[y1:y2, x1:x2] for (x1, y1, x2, y2) in boxes]
+                self._last_preds = self.predictor.predict_batch(rois)
+            else:
+                self._last_preds = []
+ 
+        boxes = self._last_boxes
+        predictions = self._last_preds
  
         mask_count = 0
         no_mask_count = 0
  
-        if boxes:
-            # Lấy ROI cho từng khuôn mặt
-            rois = [frame[y1:y2, x1:x2] for (x1, y1, x2, y2) in boxes]
-            predictions = self.predictor.predict_batch(rois)
+        for i, (x1, y1, x2, y2) in enumerate(boxes):
+            if i >= len(predictions):
+                break
+            label, conf = predictions[i]
+            color = COLORS.get(label, (200, 200, 200))
  
-            for (x1, y1, x2, y2), (label, conf) in zip(boxes, predictions):
-                color = COLORS.get(label, (200, 200, 200))
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
  
-                # Vẽ bounding box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            text = f"{label}: {conf:.0%}"
+            (tw, th), bl = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)
+            cv2.rectangle(frame, (x1, y1 - th - bl - 6), (x1 + tw + 4, y1), color, -1)
+            cv2.putText(frame, text, (x1 + 2, y1 - bl - 3),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
  
-                # Nhãn + confidence
-                text = f"{label}: {conf:.0%}"
-                (tw, th), baseline = cv2.getTextSize(
-                    text, cv2.FONT_HERSHEY_DUPLEX, 0.6, 1
-                )
-                # Nền cho chữ
-                cv2.rectangle(
-                    frame,
-                    (x1, y1 - th - baseline - 6),
-                    (x1 + tw + 4, y1),
-                    color,
-                    -1,
-                )
-                cv2.putText(
-                    frame,
-                    text,
-                    (x1 + 2, y1 - baseline - 3),
-                    cv2.FONT_HERSHEY_DUPLEX,
-                    0.6,
-                    (255, 255, 255),
-                    1,
-                    cv2.LINE_AA,
-                )
+            if label == "Co khau trang":
+                mask_count += 1
+            else:
+                no_mask_count += 1
  
-                if label == "Co khau trang":
-                    mask_count += 1
-                else:
-                    no_mask_count += 1
- 
-        # HUD: FPS góc trên phải
+        # FPS
         h, w = frame.shape[:2]
-        fps_text = f"FPS: {fps:.1f}"
-        cv2.putText(
-            frame,
-            fps_text,
-            (w - 110, 28),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (180, 180, 180),
-            2,
-            cv2.LINE_AA,
-        )
+        cv2.putText(frame, f"FPS:{fps:.0f}", (w - 90, 24),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (150, 150, 150), 2, cv2.LINE_AA)
  
         stats = {
             "total": len(boxes),
@@ -188,3 +135,4 @@ class CameraThread(threading.Thread):
             "fps": fps,
         }
         return frame, stats
+ 
