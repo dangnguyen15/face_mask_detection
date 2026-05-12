@@ -1,94 +1,28 @@
-# =========================
-# PYTHON
-# =========================
-
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
-# =========================
-# VIRTUAL ENV
-# =========================
-
 .venv/
 venv/
 env/
-
-# =========================
-# VS CODE
-# =========================
-
 .vscode/
-
-# =========================
-# JUPYTER
-# =========================
-
 .ipynb_checkpoints/
-
-# =========================
-# DATASET
-# =========================
-
-dataset/
-
-# =========================
-# TRAINED MODELS
-# =========================
-
-models/*.h5
-models/*.keras
-
-# =========================
-# TRAINING OUTPUT
-# =========================
-
 *.log
 *.tmp
-
-# =========================
-# SYSTEM FILES
-# =========================
-
 .DS_Store
 Thumbs.db
-
-# =========================
-# LARGE MEDIA FILES
-# =========================
-
 *.mp4
 *.avi
 *.mov
-
-# =========================
-# CACHE
-# =========================
-
 .cache/
-
-
-
-# Virtual environment
 .venv/
-
-# Python cache
 __pycache__/
 *.pyc
-
-# Dataset
 dataset/
-
-# Models
 models/*.pt
 models/*.weights
 models/*.keras
 models/*.h5
-
-# VSCode
 .vscode/
-
-# System
 .DS_Store
 Thumbs.db
